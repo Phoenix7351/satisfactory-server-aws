@@ -12,6 +12,11 @@ add-apt-repository multiverse
 dpkg --add-architecture i386
 apt update
 
+#Install ec2metadata
+sudo wget http://s3.amazonaws.com/ec2metadata/ec2-metadata
+sudo chmod a+x ec2-metadata
+sudo mv ec2-metadata /usr/bin/ec2-metadata
+
 # Needed to accept steam license without hangup
 echo steam steam/question 'select' "I AGREE" | sudo debconf-set-selections
 echo steam steam/license note '' | sudo debconf-set-selections
@@ -102,6 +107,66 @@ WantedBy=multi-user.target
 EOF
 systemctl enable auto-shutdown
 systemctl start auto-shutdown
+
+# DuckDNS Setup
+
+mkdir /home/ubuntu/duckdns
+
+cat << 'EOF' > /home/ubuntu/duckdns/duck.sh
+#!/bin/bash
+current=""
+while true; do
+    latest=`/usr/bin/ec2-metadata --public-ipv4`
+    echo "public-ipv4=$latest"
+    if [ "$current" == "$latest" ]
+    then
+        echo "ip not changed"
+    else
+        echo "ip has changed - updating"
+        current=$latest
+        echo url="[redacted]" | curl -k -o /home/ubuntu/duckdns/duck.log -K -
+    fi
+    sleep 5m
+done
+EOF
+
+chmod 700 /home/ubuntu/duckdns/duck.sh
+sudo chown ubuntu:ubuntu /home/ubuntu/duckdns/duck.sh
+
+#cat << 'EOF' > /home/ubuntu/duckdns/duck_daemon.sh
+##!/bin/bash
+##su - ubuntu -c "nohup /home/ubuntu/duckdns/duck.sh > /home/ubuntu/duckdns/duck.log 2>&1&"
+#nohup /home/ubuntu/duckdns/duck.sh > /home/ubuntu/duckdns/duck.log 2>&1&
+#EOF
+#
+#chmod a+x /home/ubuntu/duckdns/duck_daemon.sh
+#sudo chown ubuntu:ubuntu /home/ubuntu/duckdns/duck_daemon.sh
+#sudo chmod 744 /home/ubuntu/duckdns/duck_daemon.sh
+#
+#sudo ln -s /home/ubuntu/duckdns/duck_daemon.sh /etc/rc5.d/S10duckdns
+#
+#sudo /etc/rc5.d/S10duckdns
+
+cat << 'EOF' > /etc/systemd/system/duck_daemon.service
+[Unit]
+Description=Automatically updates the DNS server
+After=syslog.target network.target nss-lookup.target network-online.target
+
+[Service]
+Environment="LD_LIBRARY_PATH=./linux64"
+ExecStart=/home/ubuntu/duckdns/duck.sh
+User=ubuntu
+Group=ubuntu
+StandardOutput=journal
+Restart=on-failure
+KillSignal=SIGINT
+WorkingDirectory=/home/ubuntu/duckdns
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable duck_daemon
+systemctl start duck_daemon
 
 # automated backups to s3 every 5 minutes
 su - ubuntu -c "crontab -l -e ubuntu | { cat; echo \"*/5 * * * * /usr/local/bin/aws s3 sync /home/ubuntu/.config/Epic/FactoryGame/Saved/SaveGames/server s3://$S3_SAVE_BUCKET\"; } | crontab -"
